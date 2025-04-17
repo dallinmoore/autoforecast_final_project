@@ -1,7 +1,6 @@
 # Author: Prof. Pedram Jahangiry
 # Date: 2024-10-10
 
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,6 +8,7 @@ import matplotlib.pyplot as plt
 from sktime.forecasting.ets import AutoETS
 from sktime.forecasting.arima import AutoARIMA
 from sktime.forecasting.base import ForecastingHorizon
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 def manual_train_test_split(y, train_size):
     split_point = int(len(y) * train_size)
@@ -23,10 +23,10 @@ def run_forecast(y_train, y_test, model, fh, **kwargs):
         raise ValueError("Unsupported model")
     
     forecaster.fit(y_train)
-    y_pred = forecaster.predict(fh=ForecastingHorizon(y_test.index, is_relative=False))
-    
+    y_pred = forecaster.predict(fh=ForecastingHorizon(y_test.index.drop_duplicates(), is_relative=False))
+
     last_date = y_test.index[-1]
-    future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq)
+    future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq).drop_duplicates()
     future_horizon = ForecastingHorizon(future_dates, is_relative=False)
     y_forecast = forecaster.predict(fh=future_horizon)
     
@@ -43,8 +43,6 @@ def plot_time_series(y_train, y_test, y_pred, y_forecast, title):
     plt.xlabel("Date")
     plt.ylabel("Value")
     return fig
-
-
 
 def main():
     st.set_page_config(layout="wide")
@@ -77,7 +75,7 @@ def main():
             start_q = st.number_input("Min q", min_value=0, value=0)
             max_q = st.number_input("Max q", min_value=0, value=5)
             d = st.number_input("d", min_value=0, value=1)
-            
+
             st.subheader("Seasonal")
             seasonal = st.checkbox("Seasonal", value=True)
             if seasonal:
@@ -87,7 +85,7 @@ def main():
                 max_Q = st.number_input("Max Q", min_value=0, value=2)
                 D = st.number_input("D", min_value=0, value=1)
                 sp = st.number_input("Periods", min_value=1, value=12)
-            
+
             model_params = {
                 "start_p": start_p,
                 "max_p": max_p,
@@ -111,59 +109,66 @@ def main():
         uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
         if uploaded_file is not None:
             try:
-                # Read the CSV file
                 df = pd.read_csv(uploaded_file)
-                
-                # Allow user to select the frequency
-                freq_options = ['D', 'W', 'M', 'Q', 'Y']
-                freq = st.selectbox("Select the data frequency", freq_options)
-                
-                # Convert the index to datetime and then to PeriodIndex
-                df['date'] = pd.to_datetime(df.iloc[:, 0], errors='coerce')
-                df = df.set_index('date')
-                df = df.sort_index()  # Ensure the index is sorted
-                df.index = df.index.to_period(freq)
-                
-                # Remove any rows with NaT in the index
-                df = df.loc[df.index.notnull()]
-                
-                st.subheader("Data Preview")
-                st.write(df.head())
 
-                # Filter out non-numeric columns
-                numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
-                
-                if not numeric_columns:
-                    st.error("No numeric columns found in the uploaded data. Please ensure your CSV contains numeric data for forecasting.")
+                datetime_candidates = [
+                    col for col in df.columns
+                    if (pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_datetime64_any_dtype(df[col]))
+                    and pd.to_datetime(df[col], errors='coerce').notna().sum() > 0
+                ]
+
+                if not datetime_candidates:
+                    st.error("No valid datetime-like columns found.")
                 else:
-                    target_variable = st.selectbox("Select your target variable", numeric_columns)
+                    datetime_column = st.selectbox("Select the datetime column", datetime_candidates)
 
-                    # Plot the time series of the selected target variable
-                    st.subheader(f"Time Series Plot: {target_variable}")
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    ax.plot(df.index.to_timestamp(), df[target_variable])
-                    plt.title(f"{target_variable} Time Series")
-                    plt.xlabel("Date")
-                    plt.ylabel("Value")
-                    st.pyplot(fig)
+                    df['datetime'] = pd.to_datetime(df[datetime_column], errors='coerce')
+                    df = df.dropna(subset=['datetime']).drop_duplicates(subset='datetime').sort_values('datetime')
+                    df = df.set_index('datetime')
+
+                    inferred_freq = pd.infer_freq(df.index)
+                    freq_options = ['H', 'D', 'W', 'M', 'Q', 'Y']
+
+                    if inferred_freq:
+                        st.info(f"Detected frequency: **{inferred_freq}**")
+                        index_to_use = freq_options.index(inferred_freq) if inferred_freq in freq_options else 0
+                        freq = st.selectbox("Confirm or change frequency", freq_options, index=index_to_use)
+                    else:
+                        st.warning("Could not infer frequency. Please select manually.")
+                        freq = st.selectbox("Select the data frequency", freq_options)
+
+                    try:
+                        df.index = df.index.to_period(freq)
+                        df = df.loc[df.index.notnull()]
+                    except Exception as e:
+                        st.error(f"Unable to convert index: {str(e)}")
+
+                    st.subheader("Data Preview")
+                    st.write(df.head())
+
+                    numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+                    if not numeric_columns:
+                        st.error("No numeric columns found.")
+                    else:
+                        target_variable = st.selectbox("Select your target variable", numeric_columns)
+                        st.subheader(f"Time Series Plot: {target_variable}")
+                        fig, ax = plt.subplots(figsize=(10, 4))
+                        ax.plot(df.index.to_timestamp(), df[target_variable])
+                        st.pyplot(fig)
 
             except Exception as e:
                 st.error(f"An error occurred while processing the file: {str(e)}")
-                st.error("Please ensure your CSV file is properly formatted with a date column and numeric data for forecasting.")
 
     with col3:
         st.header("Forecast Results")
         fh = st.number_input("Number of periods to forecast", min_value=1, value=10)
         run_forecast_button = st.button("Run Forecast")
-        
+
         if run_forecast_button:
             if 'df' in locals() and 'target_variable' in locals():
                 try:
                     y = df[target_variable]
-                    
-                    # Perform train-test split
                     y_train, y_test = manual_train_test_split(y, train_size)
-
                     forecaster, y_pred, y_forecast = run_forecast(y_train, y_test, model_choice, fh, **model_params)
 
                     fig = plot_time_series(y_train, y_test, y_pred, y_forecast, f"{model_choice} Forecast for {target_variable}")
@@ -174,6 +179,31 @@ def main():
 
                     st.subheader("Future Forecast Values")
                     st.write(y_forecast)
+
+                    # Naïve baseline
+                    naive_pred = pd.Series(y_train.iloc[-1], index=y_test.index)
+                    naive_mse = mean_squared_error(y_test, naive_pred)
+                    naive_rmse = np.sqrt(naive_mse)
+                    naive_mae = mean_absolute_error(y_test, naive_pred)
+
+                    st.subheader("Naïve Baseline Performance")
+                    st.metric("Naïve RMSE", round(naive_rmse, 2))
+                    st.metric("Naïve MAE", round(naive_mae, 2))
+
+                    with st.expander("Model Summary"):
+                        st.text(forecaster.summary())
+
+                    csv = y_forecast.to_frame(name="Forecast").reset_index()
+                    csv.columns = ["Date", "Forecast"]
+                    csv_data = csv.to_csv(index=False).encode("utf-8")
+
+                    st.download_button(
+                        label="Download Forecast CSV",
+                        data=csv_data,
+                        file_name="forecast_results.csv",
+                        mime="text/csv"
+                    )
+
                 except Exception as e:
                     st.error(f"An error occurred during forecasting: {str(e)}")
             else:
