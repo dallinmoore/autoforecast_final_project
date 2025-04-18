@@ -172,18 +172,27 @@ def run_forecast(y_train, y_test, model, fh, **kwargs):
             # Use recursive forecasting for future predictions
             y_forecast = recursive_forecast_ml(forecaster, X_last, fh, y_train.index.freq)
     else:
-        # Original code for ETS and ARIMA models
+        # Code for ETS and ARIMA models with duplicate handling
         if model == 'ETS':
             forecaster = AutoETS(**kwargs)
         elif model == 'ARIMA':
             forecaster = AutoARIMA(**kwargs)
         
         forecaster.fit(y_train)
-        y_pred = forecaster.predict(fh=ForecastingHorizon(y_test.index, is_relative=False))
+        
+        # Handle potential duplicate indices in test data
+        test_indices = y_test.index.drop_duplicates()
+        y_pred = forecaster.predict(fh=ForecastingHorizon(test_indices, is_relative=False))
+        
+        # Forecast future values
         last_date = y_test.index[-1]
-        future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq)
+        future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq).drop_duplicates()
         future_horizon = ForecastingHorizon(future_dates, is_relative=False)
         y_forecast = forecaster.predict(fh=future_horizon)
+        
+        # Add a summary method to the forecaster objects if they don't already have one
+        if not hasattr(forecaster, 'summary'):
+            forecaster.summary = lambda: str(forecaster)
     
     return forecaster, y_pred, y_forecast
 

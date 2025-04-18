@@ -4,8 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from preprocess import manual_train_test_split, plot_time_series
 from models import run_forecast
-from ui import render_model_params_ui, render_data_upload_ui
-from metrics import calculate_forecast_metrics, display_metrics
+from ui import render_model_params_ui, render_data_upload_ui, render_forecast_results_ui
+from metrics import calculate_forecast_metrics, display_metrics, calculate_naive_baseline
 
 def main():
     st.set_page_config(layout="wide")
@@ -32,15 +32,13 @@ def main():
         st.header("Forecast Results")
         fh = st.number_input("Number of periods to forecast", min_value=1, value=10)
         run_forecast_button = st.button("Run Forecast")
-        
+
         if run_forecast_button:
             if df is not None and target_variable is not None:
                 try:
                     y = df[target_variable]
-                    
-                    # Perform train-test split
                     y_train, y_test = manual_train_test_split(y, train_size)
-
+                    
                     # Run forecast using model module
                     forecaster, y_pred, y_forecast = run_forecast(y_train, y_test, model_choice, fh, **model_params)
 
@@ -53,11 +51,15 @@ def main():
                     st.subheader("Forecast Accuracy Metrics")
                     st.table(display_metrics(metrics))
 
-                    st.subheader("Test Set Predictions")
-                    st.write(y_pred)
+                    # Calculate and display naïve baseline
+                    naive_metrics = calculate_naive_baseline(y_train, y_test)
+                    st.subheader("Naïve Baseline Performance")
+                    st.metric("Naïve RMSE", round(naive_metrics["RMSE"], 2))
+                    st.metric("Naïve MAE", round(naive_metrics["MAE"], 2))
+                    
+                    # Display forecast results
+                    render_forecast_results_ui(forecaster, y_pred, y_forecast)
 
-                    st.subheader("Future Forecast Values")
-                    st.write(y_forecast)
                 except Exception as e:
                     st.error(f"An error occurred during forecasting: {str(e)}")
             else:
