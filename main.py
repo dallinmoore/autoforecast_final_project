@@ -1,10 +1,11 @@
-# Author: Prof. Pedram Jahangiry
-# Date: 2024-10-10
+# Author: Prof. Pedram Jahangiry (modified by Alesandro's Assistant)
+# Updated: 2025-04-21
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import plotly.express as px
 from sktime.forecasting.ets import AutoETS
 from sktime.forecasting.arima import AutoARIMA
 from sktime.forecasting.base import ForecastingHorizon
@@ -21,7 +22,7 @@ def run_forecast(y_train, y_test, model, fh, **kwargs):
         forecaster = AutoARIMA(**kwargs)
     else:
         raise ValueError("Unsupported model")
-    
+
     forecaster.fit(y_train)
     y_pred = forecaster.predict(fh=ForecastingHorizon(y_test.index.drop_duplicates(), is_relative=False))
 
@@ -29,19 +30,24 @@ def run_forecast(y_train, y_test, model, fh, **kwargs):
     future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq).drop_duplicates()
     future_horizon = ForecastingHorizon(future_dates, is_relative=False)
     y_forecast = forecaster.predict(fh=future_horizon)
-    
+
     return forecaster, y_pred, y_forecast
 
 def plot_time_series(y_train, y_test, y_pred, y_forecast, title):
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(y_train.index.to_timestamp(), y_train.values, label="Train")
-    ax.plot(y_test.index.to_timestamp(), y_test.values, label="Test")
-    ax.plot(y_pred.index.to_timestamp(), y_pred.values, label="Test Predictions")
-    ax.plot(y_forecast.index.to_timestamp(), y_forecast.values, label="Forecast")
-    plt.legend()
-    plt.title(title)
-    plt.xlabel("Date")
-    plt.ylabel("Value")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=y_train.index.to_timestamp(), y=y_train.values, mode='lines', name='Train'))
+    fig.add_trace(go.Scatter(x=y_test.index.to_timestamp(), y=y_test.values, mode='lines', name='Test'))
+    fig.add_trace(go.Scatter(x=y_pred.index.to_timestamp(), y=y_pred.values, mode='lines', name='Test Predictions'))
+    fig.add_trace(go.Scatter(x=y_forecast.index.to_timestamp(), y=y_forecast.values, mode='lines', name='Forecast'))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title="Value",
+        hovermode="x unified",
+        height=500,
+        width=1000
+    )
     return fig
 
 def main():
@@ -151,10 +157,24 @@ def main():
                         st.error("No numeric columns found.")
                     else:
                         target_variable = st.selectbox("Select your target variable", numeric_columns)
-                        st.subheader(f"Time Series Plot: {target_variable}")
-                        fig, ax = plt.subplots(figsize=(10, 4))
-                        ax.plot(df.index.to_timestamp(), df[target_variable])
-                        st.pyplot(fig)
+                        min_date = df.index.min().to_timestamp()
+                        max_date = df.index.max().to_timestamp()
+
+                        start_date, end_date = st.date_input(
+                            "Select date range for preview",
+                            value=(min_date, max_date),
+                            min_value=min_date,
+                            max_value=max_date
+                        )
+
+                        filtered_df = df[(df.index.to_timestamp() >= pd.Timestamp(start_date)) &
+                                         (df.index.to_timestamp() <= pd.Timestamp(end_date))]
+
+                        plot_df = filtered_df.copy()
+                        plot_df.index = plot_df.index.to_timestamp()
+                        plot_df = plot_df.reset_index().rename(columns={plot_df.index.name: 'datetime'})
+                        fig = px.line(plot_df, x='datetime', y=target_variable, title=f"{target_variable} Over Time")
+                        st.plotly_chart(fig, use_container_width=True)
 
             except Exception as e:
                 st.error(f"An error occurred while processing the file: {str(e)}")
@@ -172,7 +192,7 @@ def main():
                     forecaster, y_pred, y_forecast = run_forecast(y_train, y_test, model_choice, fh, **model_params)
 
                     fig = plot_time_series(y_train, y_test, y_pred, y_forecast, f"{model_choice} Forecast for {target_variable}")
-                    st.pyplot(fig)
+                    st.plotly_chart(fig, use_container_width=True)
 
                     st.subheader("Test Set Predictions")
                     st.write(y_pred)
@@ -180,7 +200,6 @@ def main():
                     st.subheader("Future Forecast Values")
                     st.write(y_forecast)
 
-                    # Naïve baseline
                     naive_pred = pd.Series(y_train.iloc[-1], index=y_test.index)
                     naive_mse = mean_squared_error(y_test, naive_pred)
                     naive_rmse = np.sqrt(naive_mse)
