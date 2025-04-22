@@ -150,8 +150,28 @@ def render_step1_data_upload():
     """
     st.header("Step 1: Upload Data")
     
-    # Use session_state for the file uploader to maintain state
-    uploaded_file = st.file_uploader("Choose a CSV file", type="csv", key="file_uploader")
+    # Add default file checkbox
+    use_default_file = st.checkbox("Use default dataset (Weather_dataset.csv)", value=True)
+    
+    # Handle file upload or default file selection
+    uploaded_file = None
+    
+    if use_default_file:
+        # Use the default Weather_dataset.csv
+        import os
+        default_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Weather_dataset.csv")
+        if os.path.exists(default_file_path):
+            uploaded_file = open(default_file_path, "rb")
+            st.success("Using default Weather_dataset.csv")
+            st.session_state._uploaded_file = True
+        else:
+            st.error("Default Weather_dataset.csv not found")
+            use_default_file = False
+    
+    # Only show file uploader if not using default file
+    if not use_default_file:
+        # Use session_state for the file uploader to maintain state
+        uploaded_file = st.file_uploader("Choose a CSV file", type="csv", key="file_uploader")
     
     # Set the flag as soon as a file is uploaded - directly check the file uploader value
     if uploaded_file is not None:
@@ -280,6 +300,10 @@ def render_step1_data_upload():
             st.session_state.target_variable = target_variable
             st.session_state.freq = freq
             
+            # Close the file if it's the default file
+            if use_default_file and uploaded_file is not None:
+                uploaded_file.close()
+                
             return df, target_variable, freq
             
         except Exception as e:
