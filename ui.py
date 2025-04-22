@@ -80,20 +80,28 @@ def render_step_navigation():
         color: #6c757d;
         border: 2px solid #e9ecef;
     }
+    .right-button {
+        float: right;
+    }
     </style>
     """, unsafe_allow_html=True)
     
     # Navigation buttons
     st.markdown("---")
-    col1, col2, col3 = st.columns([1, 1, 1])
     
-    with col1:
+    # Use a container for better alignment
+    nav_container = st.container()
+    
+    # Create a row with appropriate column widths for navigation buttons
+    prev_col, spacer, next_col = nav_container.columns([1, 10, 1])
+    
+    with prev_col:
         if st.session_state.current_step > 1:
-            if st.button("⬅️ Previous Step"):
+            if st.button("Previous"):
                 st.session_state.current_step -= 1
                 st.rerun()
     
-    with col3:
+    with next_col:
         if st.session_state.current_step < 3:
             # Check if we can proceed to the next step
             can_proceed = True
@@ -106,7 +114,7 @@ def render_step_navigation():
                 # No confirmation button needed for Step 2 now
                 can_proceed = True
                 
-            next_button = st.button("Next Step ➡️", disabled=not can_proceed)
+            next_button = st.button("Next", disabled=not can_proceed, key="next_button")
             if next_button:
                 # If moving from step 1 to 2, automatically save the data choices
                 if st.session_state.current_step == 1:
@@ -117,6 +125,19 @@ def render_step_navigation():
                 
                 st.session_state.current_step += 1
                 st.rerun()
+    
+    # For truly right-aligned button using custom HTML
+    if st.session_state.current_step < 3:
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stButton"][data-baseweb="button"] {
+                float: right;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
     
     return st.session_state.current_step
 
@@ -295,7 +316,6 @@ def render_step2_model_configuration():
                           help="Percentage of data to use for training. The rest will be used for validation.") / 100
     
     # Model parameters
-    st.subheader("Model Parameters")
     model_params = render_model_params_ui(model_choice)
     
     # Automatically save configuration when proceeding to Step 3
@@ -469,7 +489,7 @@ def render_step3_results():
                             delta=f"{naive_metrics['RMSE'] - metrics['RMSE']:.2f}", 
                             delta_color="normal")
                     st.metric("MAE Improvement", f"{mae_improvement:.2f}%", 
-                            delta=f"{naive_metrics["MAE"] - metrics["MAE"]:.2f}", 
+                            delta=f"{naive_metrics['MAE'] - metrics['MAE']:.2f}", 
                             delta_color="normal")
                 
                 # Detailed forecast results
@@ -491,11 +511,136 @@ def render_model_params_ui(model_choice):
         dict: Model parameters based on user selections
     """
     if model_choice == "ETS":
-        error = st.selectbox("Error type", ["add", "mul"])
-        trend = st.selectbox("Trend type", ["add", "mul", None])
-        seasonal = st.selectbox("Seasonal type", ["add", "mul", None])
-        damped_trend = st.checkbox("Damped trend", value=False)
-        seasonal_periods = st.number_input("Seasonal periods", min_value=1, value=1)
+        # Get time series data from session state
+        if 'df' in st.session_state and 'target_variable' in st.session_state:
+            df = st.session_state.df
+            target_variable = st.session_state.target_variable
+            ts = df[target_variable]
+            
+            # Check for negativity in the series
+            has_negative = (ts < 0).any()
+            
+            # Auto-detect trend
+            from statsmodels.tsa.seasonal import seasonal_decompose
+            
+            # Try to determine if trend is present
+            try:
+                # Use statsmodels to decompose the time series
+                freq = st.session_state.freq
+                period = 1
+                
+                # Try to determine seasonal period based on frequency
+                if freq == 'h':
+                    period = 24  # 24 hours in a day
+                elif freq == 'D':
+                    period = 7   # 7 days in a week
+                elif freq == 'W':
+                    period = 52  # 52 weeks in a year
+                elif freq == 'M':
+                    period = 12  # 12 months in a year
+                elif freq == 'Q':
+                    period = 4   # 4 quarters in a year
+                
+                # Only attempt decomposition if we have enough data points
+                has_trend = False
+                has_seasonality = False
+                
+                if len(ts) >= 2 * period and period > 1:
+                    # Convert to datetime index to use seasonal_decompose
+                    temp_ts = ts.copy()
+                    if not isinstance(temp_ts.index, pd.DatetimeIndex):
+                        temp_ts.index = temp_ts.index.to_timestamp()
+                    
+                    try:
+                        decomposition = seasonal_decompose(temp_ts, model='additive', period=period)
+                        trend_component = decomposition.trend.dropna()
+                        
+                        # Check if trend is significant
+                        if len(trend_component) > 0:
+                            trend_range = trend_component.max() - trend_component.min()
+                            data_range = ts.max() - ts.min()
+                            has_trend = trend_range > 0.1 * data_range
+                            
+                        # Check if seasonality is significant
+                        seasonal_component = decomposition.seasonal.dropna()
+                        if len(seasonal_component) > 0:
+                            seasonal_range = seasonal_component.max() - seasonal_component.min()
+                            has_seasonality = seasonal_range > 0.05 * data_range
+                    except:
+                        # If decomposition fails, use simpler heuristics
+                        has_trend = True  # Assume trend by default
+                        has_seasonality = period > 1  # Assume seasonality if period > 1
+                else:
+                    # Simple trend detection for short series
+                    if len(ts) > 5:
+                        # Check if there's consistent increase/decrease
+                        has_trend = abs(ts.iloc[-1] - ts.iloc[0]) > 0.1 * ts.std() * (len(ts) ** 0.5)
+                    else:
+                        has_trend = True  # Default to True for very short series
+                    
+                    has_seasonality = period > 1 and len(ts) >= period  # Simple seasonality check
+            except:
+                # Default values if auto-detection fails
+                has_trend = True
+                has_seasonality = period > 1
+            
+            # Display auto-detected information
+            with st.expander("📊 View Automated Parameter Analysis Results"):
+                info_cols = st.columns(1)
+                with info_cols[0]:
+                    if has_negative:
+                        st.markdown("• Series contains negative values - additive error is recommended")
+                    else:
+                        st.markdown("• Series is non-negative - multiplicative error may be suitable")
+                        
+                    if has_trend:
+                        st.markdown("• Trend detected in the data")
+                    else:
+                        st.markdown("• No significant trend detected")
+                        
+                    if has_seasonality:
+                        st.markdown(f"• Seasonal pattern detected with period {period}")
+                    else:
+                        st.markdown("• No significant seasonality detected")
+        
+            # Make recommendations based on auto-detection
+            error_default = "add" if has_negative else "mul"
+            trend_default = "add" if has_trend else None
+            seasonal_default = "add" if has_seasonality else None
+            seasonal_period_default = period if has_seasonality else 1
+            
+            st.subheader("ETS Parameters")
+            st.markdown("Based on your data characteristics, the following parameters are suggested:")
+            
+            error_options = ["add", "mul"]
+            trend_options = ["add", "mul", None]
+            seasonal_options = ["add", "mul", None]
+            
+            error = st.selectbox("Error type", error_options, 
+                                index=error_options.index(error_default),
+                                help="'add' for additive errors (suitable for any data), 'mul' for multiplicative errors (only for positive data)")
+            
+            trend = st.selectbox("Trend type", trend_options, 
+                               index=trend_options.index(trend_default),
+                               help="'add' for additive trend, 'mul' for multiplicative trend, None for no trend")
+            
+            seasonal = st.selectbox("Seasonal type", seasonal_options, 
+                                  index=seasonal_options.index(seasonal_default),
+                                  help="'add' for additive seasonality, 'mul' for multiplicative seasonality, None for no seasonality")
+            
+            damped_trend = st.checkbox("Damped trend", value=False,
+                                     help="Damping reduces the impact of the trend component as the forecast horizon increases")
+            
+            seasonal_periods = st.number_input("Seasonal periods", min_value=1, value=seasonal_period_default,
+                                             help="Number of time steps in one seasonal cycle")
+        else:
+            # If no data is available, use basic interface
+            error = st.selectbox("Error type", ["add", "mul"])
+            trend = st.selectbox("Trend type", ["add", "mul", None])
+            seasonal = st.selectbox("Seasonal type", ["add", "mul", None])
+            damped_trend = st.checkbox("Damped trend", value=False)
+            seasonal_periods = st.number_input("Seasonal periods", min_value=1, value=1)
+        
         return {
             "error": error,
             "trend": trend,
@@ -504,53 +649,242 @@ def render_model_params_ui(model_choice):
             "sp": seasonal_periods,
         }
     elif model_choice == "ARIMA":
-        st.subheader("Non-seasonal")
-        start_p = st.number_input("Min p", min_value=0, value=0)
-        max_p = st.number_input("Max p", min_value=0, value=5)
-        start_q = st.number_input("Min q", min_value=0, value=0)
-        max_q = st.number_input("Max q", min_value=0, value=5)
-        d = st.number_input("d", min_value=0, value=1)
-        
-        st.subheader("Seasonal")
-        seasonal = st.checkbox("Seasonal", value=True)
-        
-        model_params = {
-            "start_p": start_p,
-            "max_p": max_p,
-            "start_q": start_q,
-            "max_q": max_q,
-            "d": d,
-            "seasonal": seasonal,
-        }
-        
-        if seasonal:
-            start_P = st.number_input("Min P", min_value=0, value=0)
-            max_P = st.number_input("Max P", min_value=0, value=2)
-            start_Q = st.number_input("Min Q", min_value=0, value=0)
-            max_Q = st.number_input("Max Q", min_value=0, value=2)
-            D = st.number_input("D", min_value=0, value=1)
-            sp = st.number_input("Periods", min_value=1, value=12)
+        # Get time series data from session state
+        if 'df' in st.session_state and 'target_variable' in st.session_state:
+            df = st.session_state.df
+            target_variable = st.session_state.target_variable
+            ts = df[target_variable]
+            freq = st.session_state.freq
             
-            model_params.update({
-                "start_P": start_P,
-                "max_P": max_P,
-                "start_Q": start_Q,
-                "max_Q": max_Q,
-                "D": D,
-                "sp": sp
-            })
+            # Auto-detection for ARIMA parameters
+            import pandas as pd
+            import numpy as np
+            from statsmodels.tsa.stattools import adfuller, acf, pacf
+            
+            # Detect stationarity using ADF test to suggest d value
+            try:
+                adf_result = adfuller(ts)
+                is_stationary = adf_result[1] <= 0.05  # p-value <= 0.05 indicates stationarity
+                suggested_d = 0 if is_stationary else 1
+            except:
+                suggested_d = 1  # Default if test fails
+            
+            # Detect seasonality and suggest seasonal period
+            seasonal_period = 1
+            if freq == 'h':
+                seasonal_period = 24  # 24 hours in a day
+            elif freq == 'D':
+                seasonal_period = 7   # 7 days in a week
+            elif freq == 'W':
+                seasonal_period = 52  # 52 weeks in a year
+            elif freq == 'M':
+                seasonal_period = 12  # 12 months in a year
+            elif freq == 'Q':
+                seasonal_period = 4   # 4 quarters in a year
+            
+            # Detect if seasonality exists
+            has_seasonality = False
+            try:
+                if len(ts) >= 2 * seasonal_period:
+                    # Calculate autocorrelation at seasonal lag
+                    autocorr = acf(ts, nlags=seasonal_period)
+                    has_seasonality = abs(autocorr[seasonal_period]) > 0.3  # Significant autocorrelation at seasonal lag
+            except:
+                has_seasonality = seasonal_period > 1  # Assume seasonality if period > 1
+            
+            # Suggest p and q based on ACF and PACF if enough data
+            suggested_p = 1
+            suggested_q = 1
+            suggested_P = 1
+            suggested_Q = 1
+            suggested_D = 1 if has_seasonality else 0
+            
+            # Display auto-detection results in a compact info box
+            with st.expander("📊 View Automated Parameter Analysis Results"):
+                info_cols = st.columns(2)
+                with info_cols[0]:
+                    st.subheader("Non-Seasonal Analysis")
+                    st.markdown(f"• **Stationarity**: {'Yes ✓' if is_stationary else 'No ✗'}")
+                    st.markdown(f"• **Suggested d**: {suggested_d}")
+                    st.markdown(f"• **Suggested p**: {suggested_p}")
+                    st.markdown(f"• **Suggested q**: {suggested_q}")
+                
+                with info_cols[1]:
+                    st.subheader("Seasonal Analysis")
+                    st.markdown(f"• **Seasonality detected**: {'Yes ✓' if has_seasonality else 'No ✗'}")
+                    st.markdown(f"• **Seasonal period**: {seasonal_period}")
+                    if has_seasonality:
+                        st.markdown(f"• **Suggested P**: {suggested_P}")
+                        st.markdown(f"• **Suggested Q**: {suggested_Q}")
+                        st.markdown(f"• **Suggested D**: {suggested_D}")
+                        
+            # Non-seasonal parameters
+            st.subheader("ARIMA Parameters")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Autoregressive (AR)**")
+                p = st.number_input(
+                    "p value", 
+                    min_value=0, 
+                    max_value=5, 
+                    value=suggested_p,
+                    help="Number of lag observations (AR order). Higher values make the model consider more past observations."
+                )
+                
+                d = st.number_input(
+                    "d value (differencing)", 
+                    min_value=0, 
+                    max_value=2, 
+                    value=suggested_d,
+                    help="Differencing order needed to make the time series stationary. Usually 1 for most series, 0 if already stationary."
+                )
+                
+            with col2:
+                st.markdown("**Moving Average (MA)**")
+                q = st.number_input(
+                    "q value", 
+                    min_value=0, 
+                    max_value=5, 
+                    value=suggested_q,
+                    help="Size of the moving average window (MA order). Controls how many past forecast errors to use."
+                )
+                
+            # Seasonal parameters
+            st.subheader("Seasonality")
+            use_seasonal = st.radio(
+                "Include seasonal component?", 
+                ["Yes", "No"],
+                index=0 if has_seasonality else 1,
+                help="Select 'Yes' if your data shows regular patterns that repeat at fixed intervals (like yearly seasons, weekly patterns)"
+            )
+            
+            include_seasonal = use_seasonal == "Yes"
+            
+            # Initialize model parameters
+            model_params = {
+                "start_p": p,
+                "max_p": p,
+                "start_q": q,
+                "max_q": q,
+                "d": d,
+                "seasonal": include_seasonal,
+            }
+            
+            if include_seasonal:
+                st.markdown("**Seasonal Parameters**")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    P = st.number_input(
+                        "P value (seasonal AR)", 
+                        min_value=0, 
+                        max_value=2, 
+                        value=suggested_P,
+                        help="Seasonal autoregressive order. Controls effects of observations from previous seasonal cycles."
+                    )
+                    
+                    D = st.number_input(
+                        "D value (seasonal differencing)", 
+                        min_value=0, 
+                        max_value=1, 
+                        value=suggested_D,
+                        help="Seasonal differencing order. Usually 1 if there's a repeating seasonal pattern."
+                    )
+                    
+                with col2:
+                    Q = st.number_input(
+                        "Q value (seasonal MA)", 
+                        min_value=0, 
+                        max_value=2, 
+                        value=suggested_Q,
+                        help="Seasonal moving average order. Controls effects of errors from previous seasonal cycles."
+                    )
+                    
+                    s = st.number_input(
+                        "Seasonal period (s)", 
+                        min_value=2, 
+                        value=seasonal_period,
+                        help="Number of time steps in each seasonal cycle. For example, 12 for monthly data with yearly seasonality."
+                    )
+                
+                model_params.update({
+                    "start_P": P,
+                    "max_P": P,
+                    "start_Q": Q,
+                    "max_Q": Q,
+                    "D": D,
+                    "sp": s
+                })
+        else:
+            # Basic interface if no data is available
+            st.subheader("ARIMA Parameters")
+            st.warning("Load data in Step 1 to enable parameter auto-detection")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                p = st.number_input("p value", min_value=0, value=1, 
+                                   help="Autoregressive order")
+                d = st.number_input("d value", min_value=0, value=1,
+                                   help="Differencing order")
+            
+            with col2:
+                q = st.number_input("q value", min_value=0, value=1,
+                                   help="Moving average order")
+            
+            st.subheader("Seasonality")
+            use_seasonal = st.radio("Include seasonal component?", ["Yes", "No"])
+            include_seasonal = use_seasonal == "Yes"
+            
+            model_params = {
+                "start_p": p,
+                "max_p": p,
+                "start_q": q,
+                "max_q": q,
+                "d": d,
+                "seasonal": include_seasonal,
+            }
+            
+            if include_seasonal:
+                col1, col2 = st.columns(2)
+                with col1:
+                    P = st.number_input("P value", min_value=0, value=1,
+                                       help="Seasonal autoregressive order")
+                    D = st.number_input("D value", min_value=0, value=1,
+                                       help="Seasonal differencing order")
+                
+                with col2:
+                    Q = st.number_input("Q value", min_value=0, value=1,
+                                       help="Seasonal moving average order")
+                    s = st.number_input("Seasonal period", min_value=2, value=12,
+                                       help="Number of time steps in seasonal cycle")
+                
+                model_params.update({
+                    "start_P": P,
+                    "max_P": P,
+                    "start_Q": Q,
+                    "max_Q": Q,
+                    "D": D,
+                    "sp": s
+                })
         
         return model_params
     
     elif model_choice == "RandomForest" or model_choice == "XGBoost":
         # Common ML parameters section
         st.subheader("Time Series Parameters")
-        lags = st.number_input("Number of lags", min_value=1, value=3)  # Default to 3
+        lags = st.number_input("Number of lags", min_value=1, value=3,
+                               help="Number of past time steps to use as features. Higher values capture longer-term patterns.")
+        
+        # Model-specific parameters
+        st.subheader("Model Parameters")
         
         if model_choice == "RandomForest":
-            st.subheader("Model Parameters")
-            n_estimators = st.number_input("Number of trees", min_value=10, value=100)
-            max_depth = st.number_input("Max depth", min_value=1, value=10)
+            n_estimators = st.number_input("Number of trees", min_value=10, value=100,
+                                          help="Number of trees in the forest. More trees generally improve performance but increase computation time.")
+            max_depth = st.number_input("Max depth", min_value=1, value=10,
+                                       help="Maximum depth of each tree. Deeper trees can model more complex patterns but may overfit.")
+            
             return {
                 "n_estimators": n_estimators,
                 "max_depth": max_depth,
@@ -559,10 +893,13 @@ def render_model_params_ui(model_choice):
             }
         
         elif model_choice == "XGBoost":
-            st.subheader("Model Parameters")
-            learning_rate = st.number_input("Learning rate", min_value=0.01, value=0.1)
-            n_estimators = st.number_input("Number of trees", min_value=10, value=100)
-            max_depth = st.number_input("Max depth", min_value=1, value=10)
+            learning_rate = st.number_input("Learning rate", min_value=0.01, value=0.1,
+                                          help="Step size shrinkage used to prevent overfitting. Lower values require more trees.")
+            n_estimators = st.number_input("Number of trees", min_value=10, value=100,
+                                          help="Number of gradient boosted trees. More trees generally improve performance.")
+            max_depth = st.number_input("Max depth", min_value=1, value=10,
+                                       help="Maximum depth of each tree. Deeper trees can model more complex patterns but may overfit.")
+            
             return {
                 "learning_rate": learning_rate,
                 "n_estimators": n_estimators,
