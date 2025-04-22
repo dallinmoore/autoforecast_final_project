@@ -56,7 +56,15 @@ def load_and_preprocess_data(uploaded_file, freq=None):
         if freq is None:
             inferred_freq = pd.infer_freq(df.index)
             if inferred_freq:
-                freq = inferred_freq
+                # Standardize frequency - convert variations to standard forms
+                if inferred_freq == 'MS':
+                    freq = 'M'
+                elif inferred_freq == 'QS':
+                    freq = 'Q'
+                elif inferred_freq == 'YS':
+                    freq = 'Y'
+                else:
+                    freq = inferred_freq
             else:
                 freq = 'D'  # default to daily if can't infer
         
