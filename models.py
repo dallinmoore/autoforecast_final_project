@@ -86,7 +86,7 @@ def recursive_forecast_ml(model, X_test_start, future_steps, freq):
         new_row['year'] = new_idx.year
         
         # Update lag features
-        for lag in range(1, 3):  # Assuming we have at least lag_1, lag_2, lag_3
+        for lag in range(1, len([col for col in X_current.columns if col.startswith('lag_')]) + 1):
             if f'lag_{lag}' in new_row.columns:
                 if lag == 1:
                     new_row[f'lag_{lag}'] = next_pred
