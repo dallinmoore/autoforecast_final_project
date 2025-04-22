@@ -151,7 +151,7 @@ def render_step1_data_upload():
     st.header("Step 1: Upload Data")
     
     # Add default file checkbox
-    use_default_file = st.checkbox("Use default dataset (Weather_dataset.csv)", value=True)
+    use_default_file = st.checkbox("Use default dataset (Weather_dataset.csv)", value=False)
     
     # Handle file upload or default file selection
     uploaded_file = None
