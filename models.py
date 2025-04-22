@@ -18,7 +18,35 @@ def create_features(y, lags=3, rolling_windows=[3, 7, 14]):
     Returns:
         tuple: (X, y_filtered) - features and corresponding target values
     """
-    # ...existing code...
+    df = pd.DataFrame({'y': y})
+    
+    # Date-based features
+    df['month'] = df.index.month
+    df['quarter'] = df.index.quarter
+    if hasattr(df.index, 'dayofweek'):
+        df['dayofweek'] = df.index.dayofweek
+    df['year'] = df.index.year
+    
+    # Lag features
+    for lag in range(1, lags + 1):
+        df[f'lag_{lag}'] = df['y'].shift(lag)
+    
+    # Rolling window features
+    for window in rolling_windows:
+        if len(df) > window:  # Only create if we have enough data
+            df[f'rolling_mean_{window}'] = df['y'].rolling(window=window).mean()
+            df[f'rolling_std_{window}'] = df['y'].rolling(window=window).std()
+            df[f'rolling_min_{window}'] = df['y'].rolling(window=window).min()
+            df[f'rolling_max_{window}'] = df['y'].rolling(window=window).max()
+    
+    # Drop NA values from feature creation
+    df = df.dropna()
+    
+    # Target is still 'y', features are everything else
+    X = df.drop('y', axis=1)
+    y_filtered = df['y']
+    
+    return X, y_filtered
 
 def recursive_forecast_ml(model, X_test_start, future_steps, freq):
     """
@@ -33,7 +61,51 @@ def recursive_forecast_ml(model, X_test_start, future_steps, freq):
     Returns:
         pd.Series: Forecasted values
     """
-    # ...existing code...
+    last_idx = X_test_start.index[-1]
+    future_idx = pd.period_range(start=last_idx + 1, periods=future_steps, freq=freq)
+    forecasts = []
+    
+    # Make a copy to avoid modifying the original
+    X_current = X_test_start.copy()
+    
+    for i in range(future_steps):
+        # Predict the next value
+        next_pred = model.predict(X_current.iloc[[-1]])[0]
+        forecasts.append(next_pred)
+        
+        # Create new row for next prediction
+        new_row = X_current.iloc[[-1]].copy()
+        new_idx = future_idx[i]
+        new_row.index = [new_idx]
+        
+        # Update date features
+        new_row['month'] = new_idx.month
+        new_row['quarter'] = new_idx.quarter
+        if hasattr(new_idx, 'dayofweek'):
+            new_row['dayofweek'] = new_idx.dayofweek
+        new_row['year'] = new_idx.year
+        
+        # Update lag features
+        for lag in range(1, 3):  # Assuming we have at least lag_1, lag_2, lag_3
+            if f'lag_{lag}' in new_row.columns:
+                if lag == 1:
+                    new_row[f'lag_{lag}'] = next_pred
+                else:
+                    new_row[f'lag_{lag}'] = X_current.iloc[-1][f'lag_{lag-1}']
+        
+        # Update rolling features if they exist
+        for window in [3, 7, 14]:
+            if f'rolling_mean_{window}' in new_row.columns:
+                # Simple approximation for rolling mean
+                new_row[f'rolling_mean_{window}'] = (X_current.iloc[-1][f'rolling_mean_{window}'] * (window-1) + next_pred) / window
+                
+                # For other features, maintain the last value as an approximation
+                # In a more sophisticated implementation, these would be properly updated
+        
+        # Append new row to X_current
+        X_current = pd.concat([X_current, new_row])
+    
+    return pd.Series(forecasts, index=future_idx)
 
 def run_forecast(y_train, y_test, model, fh, **kwargs):
     """
@@ -134,4 +206,43 @@ def get_model_params(model_choice):
     Returns:
         dict: Default parameters for the selected model
     """
-    # ...existing code...
+    if model_choice == "ETS":
+        return {
+            "error": "add",
+            "trend": "add",
+            "seasonal": "add",
+            "damped_trend": False,
+            "sp": 1
+        }
+    elif model_choice == "ARIMA":
+        return {
+            "start_p": 0,
+            "max_p": 5,
+            "start_q": 0,
+            "max_q": 5,
+            "d": 1,
+            "seasonal": True,
+            "start_P": 0,
+            "max_P": 2,
+            "start_Q": 0,
+            "max_Q": 2,
+            "D": 1,
+            "sp": 12
+        }
+    elif model_choice == "RandomForest":
+        return {
+            "n_estimators": 100,
+            "max_depth": 10,
+            "random_state": 42,
+            "lags": 3  # Default lag value
+        }
+    elif model_choice == "XGBoost":
+        return {
+            "learning_rate": 0.1,
+            "n_estimators": 100,
+            "max_depth": 10,
+            "random_state": 42,
+            "lags": 3  # Default lag value
+        }
+    else:
+        return {}
