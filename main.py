@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from preprocess import manual_train_test_split, plot_time_series
 from models import run_forecast
 from ui import render_model_params_ui, render_data_upload_ui, render_forecast_results_ui
@@ -41,8 +42,24 @@ def main():
                     forecaster, y_pred, y_forecast = run_forecast(y_train, y_test, model_choice, fh, **model_params)
 
                     # Plot results
-                    fig = plot_time_series(y_train, y_test, y_pred, y_forecast, f"{model_choice} Forecast for {target_variable}")
-                    st.pyplot(fig)
+
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=y_train.index.to_timestamp(), y=y_train.values, mode='lines', name='Train'))
+                    fig.add_trace(go.Scatter(x=y_test.index.to_timestamp(), y=y_test.values, mode='lines', name='Test'))
+                    fig.add_trace(go.Scatter(x=y_pred.index.to_timestamp(), y=y_pred.values, mode='lines', name='Test Predictions'))
+                    fig.add_trace(go.Scatter(x=y_forecast.index.to_timestamp(), y=y_forecast.values, mode='lines', name='Forecast'))
+
+                    fig.update_layout(
+                        title=f"{model_choice} Forecast for {target_variable}",
+                        xaxis_title="Date",
+                        yaxis_title="Value",
+                        hovermode="x unified",
+                        height=500,
+                        width=1000
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
 
                     # Calculate and display metrics
                     metrics = calculate_forecast_metrics(y_test, y_pred)

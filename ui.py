@@ -170,10 +170,32 @@ def render_data_upload_ui():
             
             target_variable = st.selectbox("Select your target variable", numeric_columns)
             
-            # Plot the time series of the selected target variable
+            # Plot the time series of the selected target variable with zoom and date filtering
             st.subheader(f"Time Series Plot: {target_variable}")
-            fig = plot_original_series(df, target_variable)
-            st.pyplot(fig)
+
+            # Allow user to select date range
+            min_date = df.index.min().to_timestamp()
+            max_date = df.index.max().to_timestamp()
+
+            start_date, end_date = st.date_input(
+                "Select date range for preview",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date
+            )
+
+            # Filter data based on selected range
+            filtered_df = df[(df.index.to_timestamp() >= pd.Timestamp(start_date)) &
+                             (df.index.to_timestamp() <= pd.Timestamp(end_date))]
+
+            # Convert index for Plotly
+            plot_df = filtered_df.copy()
+            plot_df.index = plot_df.index.to_timestamp()
+            plot_df = plot_df.reset_index().rename(columns={plot_df.index.name: 'datetime'})
+
+            import plotly.express as px
+            fig = px.line(plot_df, x='datetime', y=target_variable, title=f"{target_variable} Over Time")
+            st.plotly_chart(fig, use_container_width=True)
             
             return df, target_variable, freq
             
