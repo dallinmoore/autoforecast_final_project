@@ -1,3 +1,6 @@
+# Author: Prof. Pedram Jahangiry
+# Date: 2024-10-10
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,31 +19,55 @@ def manual_train_test_split(y, train_size):
     split_point = int(len(y) * train_size)
     return y[:split_point], y[split_point:]
 
-def load_and_preprocess_data(uploaded_file, freq):
+def load_and_preprocess_data(uploaded_file, freq=None):
     """
     Load and preprocess time series data from a CSV file.
     
     Args:
         uploaded_file: Streamlit uploaded file object
-        freq (str): Time frequency ('D', 'W', 'M', 'Q', 'Y')
+        freq (str): Time frequency ('h', 'D', 'W', 'M', 'Q', 'Y')
     
     Returns:
-        pd.DataFrame: Preprocessed dataframe with date index
+        tuple: (df, freq, datetime_column) - preprocessed dataframe with date index, the frequency, and datetime column name
     """
     try:
         # Read the CSV file
         df = pd.read_csv(uploaded_file)
         
-        # Convert the index to datetime and then to PeriodIndex
-        df['date'] = pd.to_datetime(df.iloc[:, 0], errors='coerce')
-        df = df.set_index('date')
-        df = df.sort_index()  # Ensure the index is sorted
+        # Find datetime columns automatically
+        datetime_candidates = [
+            col for col in df.columns
+            if (pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_datetime64_any_dtype(df[col]))
+            and pd.to_datetime(df[col], errors='coerce').notna().sum() > 0
+        ]
+        
+        if not datetime_candidates:
+            raise ValueError("No valid datetime-like columns found in the data.")
+            
+        # Use the first datetime column found
+        datetime_column = datetime_candidates[0]
+        
+        # Convert to datetime and set as index
+        df['datetime'] = pd.to_datetime(df[datetime_column], errors='coerce')
+        df = df.dropna(subset=['datetime']).drop_duplicates(subset='datetime').sort_values('datetime')
+        df = df.set_index('datetime')
+        
+        # Infer frequency if not provided
+        if freq is None:
+            inferred_freq = pd.infer_freq(df.index)
+            if inferred_freq:
+                freq = inferred_freq
+            else:
+                freq = 'D'  # default to daily if can't infer
+        
+        # Convert index to PeriodIndex with the given frequency
         df.index = df.index.to_period(freq)
         
         # Remove any rows with NaT in the index
         df = df.loc[df.index.notnull()]
         
-        return df
+        return df, freq, datetime_column
+        
     except Exception as e:
         raise ValueError(f"Error processing file: {str(e)}")
 

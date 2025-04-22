@@ -108,35 +108,111 @@ def render_data_upload_ui():
         return None, None, None
         
     try:
-        # Get frequency selection
-        freq_options = ['D', 'W', 'M', 'Q', 'Y']
-        freq = st.selectbox("Select the data frequency", freq_options)
-        
         # Import here to avoid circular imports
         from preprocess import load_and_preprocess_data, plot_original_series
         
-        df = load_and_preprocess_data(uploaded_file, freq)
+        # Initial loading of data to find datetime columns and infer frequency
+        df = pd.read_csv(uploaded_file)
         
-        st.subheader("Data Preview")
-        st.write(df.head())
-
-        # Filter out non-numeric columns
-        numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+        # Find datetime columns
+        datetime_candidates = [
+            col for col in df.columns
+            if (pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_datetime64_any_dtype(df[col]))
+            and pd.to_datetime(df[col], errors='coerce').notna().sum() > 0
+        ]
         
-        if not numeric_columns:
-            st.error("No numeric columns found in the uploaded data. Please ensure your CSV contains numeric data for forecasting.")
-            return None, None, freq
+        if not datetime_candidates:
+            st.error("No valid datetime-like columns found in the data.")
+            return None, None, None
         
-        target_variable = st.selectbox("Select your target variable", numeric_columns)
-
-        # Plot the time series of the selected target variable
-        st.subheader(f"Time Series Plot: {target_variable}")
-        fig = plot_original_series(df, target_variable)
-        st.pyplot(fig)
+        # Let user select the datetime column
+        datetime_column = st.selectbox("Select the datetime column", datetime_candidates)
         
-        return df, target_variable, freq
+        # Create a temporary datetime index to infer frequency
+        temp_df = df.copy()
+        temp_df['datetime'] = pd.to_datetime(temp_df[datetime_column], errors='coerce')
+        temp_df = temp_df.dropna(subset=['datetime']).drop_duplicates(subset='datetime').sort_values('datetime')
+        temp_df = temp_df.set_index('datetime')
         
+        # Try to infer frequency
+        inferred_freq = pd.infer_freq(temp_df.index)
+        freq_options = ['h', 'D', 'W', 'M', 'Q', 'Y']
+        
+        # Show the inferred frequency if available
+        if inferred_freq:
+            st.info(f"Detected frequency: **{inferred_freq}**")
+            # Try to use the detected frequency as default
+            try:
+                index_to_use = freq_options.index(inferred_freq) if inferred_freq in freq_options else 0
+                freq = st.selectbox("Confirm or change frequency", freq_options, index=index_to_use)
+            except (ValueError, IndexError):
+                st.warning(f"Detected frequency '{inferred_freq}' is not in standard options.")
+                freq = st.selectbox("Select frequency", freq_options)
+        else:
+            st.warning("Could not infer frequency. Please select manually.")
+            freq = st.selectbox("Select the data frequency", freq_options)
+            
+        # Now do the full preprocessing with the selected frequency
+        try:
+            # Reset the file pointer
+            uploaded_file.seek(0)
+            df, _, _ = load_and_preprocess_data(uploaded_file, freq)
+            
+            st.subheader("Data Preview")
+            st.write(df.head())
+            
+            # Filter out non-numeric columns
+            numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            if not numeric_columns:
+                st.error("No numeric columns found in the uploaded data.")
+                return None, None, freq
+            
+            target_variable = st.selectbox("Select your target variable", numeric_columns)
+            
+            # Plot the time series of the selected target variable
+            st.subheader(f"Time Series Plot: {target_variable}")
+            fig = plot_original_series(df, target_variable)
+            st.pyplot(fig)
+            
+            return df, target_variable, freq
+            
+        except Exception as e:
+            st.error(f"Error processing data with frequency {freq}: {str(e)}")
+            return None, None, None
+            
     except Exception as e:
         st.error(f"An error occurred while processing the file: {str(e)}")
         st.error("Please ensure your CSV file is properly formatted with a date column and numeric data for forecasting.")
         return None, None, None
+
+def render_forecast_results_ui(forecaster, y_pred, y_forecast):
+    """
+    Render UI components for displaying forecast results
+    
+    Args:
+        forecaster: Fitted forecaster model
+        y_pred (pd.Series): Predictions on test data
+        y_forecast (pd.Series): Future forecasts
+    """
+    from metrics import prepare_forecast_download
+    
+    st.subheader("Test Set Predictions")
+    st.write(y_pred)
+
+    st.subheader("Future Forecast Values")
+    st.write(y_forecast)
+    
+    # Display model summary if available
+    if hasattr(forecaster, 'summary'):
+        with st.expander("Model Summary"):
+            st.text(forecaster.summary())
+            
+    # Add download button for forecast results
+    csv_data = prepare_forecast_download(y_forecast)
+    st.download_button(
+        label="Download Forecast CSV",
+        data=csv_data,
+        file_name="forecast_results.csv",
+        mime="text/csv"
+    )
